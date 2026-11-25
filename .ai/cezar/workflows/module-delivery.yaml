@@ -1,0 +1,211 @@
+version: 2
+name: module-delivery
+description: "Run one module or repair through named CI and independent review."
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "scope"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh scope module"
+  - id: "setup"
+    type: "check"
+    command: "bash .ai/bin/setup-worktree.sh ."
+  - id: "implement"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Read AGENTS.md and the assigned scope in docs/plan.md. Implement only this module. Tell the workflow if there is a decision to make. Do not push, create a PR, or merge it.
+    verdicts: ["implemented","need_decision"]
+  - id: "verify"
+    type: "check"
+    command: "corepack pnpm verify"
+  - id: "commit"
+    type: "git.commit"
+    message: "feat: deliver assigned module"
+  - id: "sync"
+    type: "git.sync-base"
+  - id: "reverify"
+    type: "check"
+    command: "corepack pnpm verify"
+  - id: "disarm"
+    type: "check"
+    command: "bash .ai/bin/automerge.sh --disarm"
+  - id: "push"
+    type: "git.push"
+  - id: "pr"
+    type: "github.draft-pr"
+  - id: "ci"
+    type: "check"
+    command: "bash .ai/bin/wait-checks.sh '{{nodes.pr.number}}' 40"
+  - id: "ci_red"
+    type: "check"
+    command: "bash .ai/bin/ci-red.sh '{{nodes.pr.number}}'"
+  - id: "review"
+    type: "agent"
+    runner: "claude"
+    verdicts: ["approve","changes","human"]
+    prompt: |
+      {{task}}
+
+      Read and apply .ai/prompts/module-review.md. The four named checks passed for {{nodes.ci.output}}. Independently compare this SHA with PR #{{nodes.pr.number}} and inspect only that revision. Do not edit files or use GitHub write commands.
+  - id: "retry"
+    type: "loop"
+    max: 2
+  - id: "fix"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Follow the latest failed check or review. Resolve any in-progress base merge before verification. Keep tests, checks and protected paths intact.
+      Local check: {{nodes.verify.output}} {{nodes.reverify.output}}
+      CI: inspect PR checks and the failure logs for the current commit.
+      Review: {{nodes.review.summary}}
+      Decision: {{nodes.decide.summary}}
+      Finish only the assigned changes. Do not use GitHub write commands.
+    session: {"continue":"implement"}
+    verdicts: ["fixed","need_decision"]
+  - id: "decisions"
+    type: "loop"
+    max: 3
+  - id: "decide"
+    type: "agent"
+    runner: "claude"
+    verdicts: ["decided","must_human"]
+    prompt: |
+      {{task}}
+
+      Read docs/plan.md, docs/questionnaire.md and .ai/prompts/must-human.md. Decide only a reversible test-only choice that those files permit. Write the decision, reason, alternative and reversal in the assigned docs/decisions/<module-id>.md. For anything requiring the maintainer, give must_human and explain what to ask. Do not use GitHub write commands.
+      Decision signals: {{nodes.implement.summary}} {{nodes.fix.summary}} {{nodes.review.summary}}
+  - id: "merge"
+    type: "check"
+    command: "bash .ai/bin/automerge.sh '{{nodes.pr.number}}'"
+  - id: "needs_sync"
+    type: "if"
+    condition: {"kind":"output","ref":"merge.exitCode","op":"equals","value":3}
+  - id: "wait_merged"
+    type: "check"
+    command: "bash .ai/bin/wait-merged.sh '{{nodes.pr.number}}' 45"
+  - id: "requeue"
+    type: "loop"
+    max: 3
+  - id: "prepare_blocked"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh mode module blocked"
+  - id: "prepare_human"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh mode module needs-human"
+  - id: "writeup"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Write only the assigned docs/decisions/<module-id>.md. Identify the blocker using the worktree, prior decisions, and Cezar event log.
+      Mode blocked means record the error, attempted remedies and next action. Mode needs-human means record what the maintainer must decide, your recommendation, and how the batch can continue if declined. Keep the current worktree intact. Do not run GitHub write commands or print credentials.
+      Mode: {{nodes.prepare_blocked.output}} {{nodes.prepare_human.output}}
+  - id: "failure_disarm"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh draft module"
+  - id: "failure_commit"
+    type: "git.commit"
+    message: "docs: record the delivery blocker"
+  - id: "failure_validate"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh validate module blocker"
+  - id: "failure_push"
+    type: "git.push"
+  - id: "failure_pr"
+    type: "github.draft-pr"
+    title: "Draft: delivery blocked"
+  - id: "failure_body"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh body module '{{nodes.failure_pr.number}}'"
+  - id: "log"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh log module"
+  - id: "alert"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh notify module"
+  - id: "ok"
+    type: "end"
+    status: "success"
+  - id: "blocked"
+    type: "end"
+    status: "failed"
+edges:
+  - { from: start, to: scope }
+  - { from: scope.pass, to: setup }
+  - { from: scope.fail, to: blocked }
+  - { from: setup.pass, to: implement }
+  - { from: setup.fail, to: prepare_blocked }
+  - { from: implement.implemented, to: verify }
+  - { from: implement.need_decision, to: decisions }
+  - { from: implement.failed, to: prepare_blocked }
+  - { from: verify.pass, to: commit }
+  - { from: verify.fail, to: retry }
+  - { from: commit.done, to: sync }
+  - { from: commit.nothing, to: sync }
+  - { from: commit.failed, to: prepare_blocked }
+  - { from: sync.done, to: reverify }
+  - { from: sync.conflict, to: retry }
+  - { from: sync.failed, to: prepare_blocked }
+  - { from: reverify.pass, to: disarm }
+  - { from: reverify.fail, to: retry }
+  - { from: disarm.pass, to: push }
+  - { from: disarm.fail, to: prepare_blocked }
+  - { from: push.done, to: pr }
+  - { from: push.failed, to: prepare_blocked }
+  - { from: pr.created, to: ci }
+  - { from: pr.failed, to: prepare_blocked }
+  - { from: ci.pass, to: review }
+  - { from: ci.fail, to: ci_red }
+  - { from: ci_red.pass, to: retry }
+  - { from: ci_red.fail, to: prepare_blocked }
+  - { from: review.approve, to: merge }
+  - { from: review.changes, to: retry }
+  - { from: review.human, to: decisions }
+  - { from: review.failed, to: prepare_blocked }
+  - { from: retry.repeat, to: fix }
+  - { from: retry.exhausted, to: prepare_blocked }
+  - { from: fix.fixed, to: verify }
+  - { from: fix.need_decision, to: decisions }
+  - { from: fix.failed, to: prepare_blocked }
+  - { from: decisions.repeat, to: decide }
+  - { from: decisions.exhausted, to: prepare_human }
+  - { from: decide.decided, to: fix }
+  - { from: decide.must_human, to: prepare_human }
+  - { from: decide.failed, to: prepare_human }
+  - { from: merge.pass, to: wait_merged }
+  - { from: merge.fail, to: needs_sync }
+  - { from: needs_sync.true, to: requeue }
+  - { from: needs_sync.false, to: prepare_blocked }
+  - { from: wait_merged.pass, to: ok }
+  - { from: wait_merged.fail, to: requeue }
+  - { from: requeue.repeat, to: sync }
+  - { from: requeue.exhausted, to: prepare_blocked }
+  - { from: prepare_blocked.pass, to: writeup }
+  - { from: prepare_blocked.fail, to: log }
+  - { from: prepare_human.pass, to: writeup }
+  - { from: prepare_human.fail, to: log }
+  - { from: writeup.done, to: failure_validate }
+  - { from: writeup.failed, to: log }
+  - { from: failure_validate.pass, to: failure_disarm }
+  - { from: failure_validate.fail, to: log }
+  - { from: failure_disarm.pass, to: failure_commit }
+  - { from: failure_disarm.fail, to: log }
+  - { from: failure_commit.done, to: failure_push }
+  - { from: failure_commit.nothing, to: failure_push }
+  - { from: failure_commit.failed, to: log }
+  - { from: failure_push.done, to: failure_pr }
+  - { from: failure_push.failed, to: log }
+  - { from: failure_pr.created, to: failure_body }
+  - { from: failure_pr.failed, to: log }
+  - { from: failure_body.pass, to: alert }
+  - { from: failure_body.fail, to: log }
+  - { from: log.pass, to: alert }
+  - { from: log.fail, to: alert }
+  - { from: alert.pass, to: blocked }
+  - { from: alert.fail, to: blocked }

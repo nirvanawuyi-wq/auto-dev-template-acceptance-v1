@@ -1,0 +1,136 @@
+name: exclusive manual schema migration
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [bootstrap-test, production]
+        required: true
+      ref:
+        description: Full reviewed SHA
+        type: string
+        required: true
+      pull_request:
+        description: Reviewed PR number
+        type: string
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  statuses: read
+concurrency:
+  group: schema-${{ inputs.mode == 'production' && 'production' || 'test' }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          MAINTAINER_GITHUB_LOGIN: ${{ vars.MAINTAINER_GITHUB_LOGIN }}
+          REVIEWED_SHA: ${{ vars.REVIEWED_MIGRATION_SHA }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          git fetch origin "refs/pull/$PR_NUMBER/head:refs/verified/manual"
+          node .github/scripts/trusted-release.mjs manual
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-manual-input
+          path: verified-releases.json
+          if-no-files-found: error
+  migrate:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.mode == 'production' && 'prod-db-admin' || 'db-admin' }}
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.115.0
+      - run: corepack pnpm install --frozen-lockfile --ignore-scripts
+        working-directory: .github/scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-manual-input
+      - env:
+          PR_NUMBER: ${{ inputs.pull_request }}
+          SHA: ${{ inputs.ref }}
+          MODE: ${{ inputs.mode }}
+          SUPABASE_TELEMETRY_DISABLED: '1'
+          LOCAL_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+        run: |
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$SHA" =~ ^[a-f0-9]{40}$ ]]
+          git fetch origin "refs/pull/$PR_NUMBER/head:refs/verified/manual"
+          test "$(git rev-parse refs/verified/manual)" = "$SHA"
+          psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f .github/scripts/local-roles.sql
+          node .github/scripts/migrate-schema.mjs local verified-releases.json expected.ts committed
+          psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f .github/scripts/local-permissions.sql
+          supabase gen types typescript --db-url "$LOCAL_DATABASE_URL" --schema business_test > generated-local.ts
+          node .github/scripts/normalize-cli-types.mjs generated-local.ts business_test expected-supabase.ts
+      - env:
+          MODE: ${{ inputs.mode }}
+          SUPABASE_TELEMETRY_DISABLED: '1'
+          SCHEMA_DATABASE_URL: ${{ secrets.SCHEMA_DATABASE_URL }}
+          TEST_MIGRATOR_DATABASE_URL: ${{ secrets.TEST_MIGRATOR_DATABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF || vars.SUPABASE_PROJECT_REF }}
+          EXPECTED_DATABASE_HOST: ${{ vars.EXPECTED_DATABASE_HOST }}
+          SUPABASE_DB_CA_CERT_BASE64: ${{ vars.SUPABASE_DB_CA_CERT_BASE64 }}
+        run: |
+          target=test
+          schema=business_test
+          if [[ "$MODE" == production ]]; then
+            target=production
+            schema=business_prod
+          else
+            export SCHEMA_DATABASE_URL="$TEST_MIGRATOR_DATABASE_URL"
+          fi
+          if [[ "$target" == test || -n "$SUPABASE_DB_CA_CERT_BASE64" ]]; then
+            test -n "$SUPABASE_DB_CA_CERT_BASE64"
+            umask 077
+            certificate="$RUNNER_TEMP/supabase-db-ca.pem"
+            printf '%s' "$SUPABASE_DB_CA_CERT_BASE64" | base64 --decode > "$certificate"
+            export NODE_EXTRA_CA_CERTS="$certificate" PGSSLROOTCERT="$certificate"
+          fi
+          node .github/scripts/migrate-schema.mjs "$target" verified-releases.json database.types.ts expected.ts
+          supabase gen types typescript --db-url "$SCHEMA_DATABASE_URL" --schema "$schema" > generated-remote.ts
+          node .github/scripts/normalize-cli-types.mjs generated-remote.ts "$schema" verified-supabase.ts
+          cmp expected-supabase.ts verified-supabase.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual-schema-${{ inputs.ref }}
+          path: |
+            database.types.ts
+            database.types.ts.manifest.json
+            verified-supabase.ts
+          if-no-files-found: error
+  advisors:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'bootstrap-test'
+    needs: migrate
+    uses: ./.github/workflows/db-advisors.yml
+    secrets: inherit

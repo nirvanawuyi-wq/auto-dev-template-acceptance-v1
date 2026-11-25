@@ -1,0 +1,108 @@
+name: test preview e2e
+on:
+  deployment_status:
+permissions: {}
+concurrency:
+  group: e2e-${{ github.event.deployment.id }}-${{ github.event.deployment_status.id }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == vars.TEST_VERCEL_DEPLOYMENT_ENV
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      deployments: read
+      pull-requests: read
+      statuses: read
+      actions: read
+    outputs:
+      sha: ${{ steps.deploy.outputs.sha }}
+      origin: ${{ steps.deploy.outputs.origin }}
+      integration: ${{ steps.deploy.outputs.integration }}
+      module: ${{ steps.deploy.outputs.module }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - id: deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_VERCEL_DEPLOYMENT_ENV: ${{ vars.TEST_VERCEL_DEPLOYMENT_ENV }}
+          TEST_VERCEL_PROJECT_ID: ${{ vars.TEST_VERCEL_PROJECT_ID }}
+          TEST_VERCEL_ACTOR_ID: ${{ vars.TEST_VERCEL_ACTOR_ID }}
+          TEST_VERCEL_PROJECT_SLUG: ${{ vars.TEST_VERCEL_PROJECT_SLUG }}
+          TEST_VERCEL_PREVIEW_SUFFIX: ${{ vars.TEST_VERCEL_PREVIEW_SUFFIX }}
+          PRODUCTION_ORIGIN: ${{ vars.PRODUCTION_ORIGIN }}
+        run: node .github/scripts/preview-evidence.mjs deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-evidence
+          path: deployment-evidence.json
+          if-no-files-found: error
+      - if: steps.deploy.outputs.integration == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_SHA: ${{ steps.deploy.outputs.sha }}
+        run: |
+          for attempt in {1..90}; do
+            if node .github/scripts/preview-evidence.mjs schema "$DEPLOYMENT_SHA"; then exit 0; else code=$?; fi
+            if [[ "$code" != 3 ]]; then exit "$code"; fi
+            sleep 20
+          done
+          echo "::error::No successful integration-schema result on $DEPLOYMENT_SHA"
+          exit 1
+  browser:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.deploy.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .pnpm-store
+            ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm exec playwright install --with-deps chromium
+      - if: needs.deploy.outputs.integration == 'true'
+        env:
+          BASE_URL: ${{ needs.deploy.outputs.origin }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node scripts/d1-probe.mjs schema
+      - env:
+          BASE_URL: ${{ needs.deploy.outputs.origin }}
+          DEPLOYMENT_SHA: ${{ needs.deploy.outputs.sha }}
+          INTEGRATION: ${{ needs.deploy.outputs.integration }}
+          MODULE_ID: ${{ needs.deploy.outputs.module }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          if [[ "$INTEGRATION" == true ]]; then
+            corepack pnpm e2e
+          else
+            paths=(e2e/acceptance)
+            if [[ -n "$MODULE_ID" && -d "e2e/features/$MODULE_ID" ]]; then paths+=("e2e/features/$MODULE_ID"); fi
+            corepack pnpm e2e "${paths[@]}"
+          fi
+          corepack pnpm exec tsx e2e/support/check-delivered.ts
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: playwright-${{ needs.deploy.outputs.sha }}
+          path: |
+            playwright-report/
+            test-results/

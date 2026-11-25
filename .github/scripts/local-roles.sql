@@ -1,0 +1,20 @@
+-- 仅隔离本地数据库使用。远端由维护者事先创建对应受限身份。
+create role test_migrator nologin;
+create role test_web nologin;
+create role test_worker nologin;
+create role prod_migrator nologin;
+create role prod_web nologin;
+create role prod_worker nologin;
+create schema business_test authorization test_migrator;
+create schema business_prod authorization prod_migrator;
+revoke all on schema business_test, business_prod from public;
+grant usage on schema business_test to test_web, test_worker;
+grant usage on schema business_prod to prod_web, prod_worker;
+alter role test_web set search_path = business_test, pg_catalog;
+alter role test_worker set search_path = business_test, pg_catalog;
+alter role prod_web set search_path = business_prod, pg_catalog;
+alter role prod_worker set search_path = business_prod, pg_catalog;
+set role prod_migrator;
+create table business_prod.permission_fixture(id integer);
+alter table business_prod.permission_fixture enable row level security;
+reset role;

@@ -1,0 +1,48 @@
+name: Production read-only smoke
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check public and private routes without signing in
+        shell: bash
+        env:
+          SITE_ORIGIN: ${{ vars.PRODUCTION_ORIGIN }}
+          PRIVATE_PROBE_PATH: ${{ vars.PRODUCTION_PRIVATE_PROBE_PATH }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SITE_ORIGIN" =~ ^https://[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
+            echo 'Set PRODUCTION_ORIGIN to the HTTPS origin of the live site.'
+            exit 1
+          fi
+          if [[ ! "$PRIVATE_PROBE_PATH" =~ ^/[A-Za-z0-9_-]+(/[A-Za-z0-9_.~-]+)*$ ||
+                "$PRIVATE_PROBE_PATH" == '/debug' ||
+                "$PRIVATE_PROBE_PATH" =~ /\.{1,2}(/|$) ]]; then
+            echo 'Set PRODUCTION_PRIVATE_PROBE_PATH to a separate existing private fixture.'
+            exit 1
+          fi
+
+          check_route() {
+            local label="$1" route="$2" expected="$3" status
+            if ! status=$(curl --disable --silent --proto '=https' --request GET \
+                --connect-timeout 5 --max-time 15 --output /dev/null \
+                --write-out '%{http_code}' "${SITE_ORIGIN}${route}"); then
+              echo "${label}: connection failed."
+              return 1
+            fi
+            if [[ ! "$status" =~ ^($expected)$ ]]; then
+              echo "${label}: unexpected HTTP ${status}."
+              return 1
+            fi
+            echo "${label}: HTTP ${status}."
+          }
+
+          check_route 'Homepage' '/' '2[0-9][0-9]'
+          check_route 'Diagnostics' '/debug' '404'
+          check_route 'Private fixture' "$PRIVATE_PROBE_PATH" '401|403|404'

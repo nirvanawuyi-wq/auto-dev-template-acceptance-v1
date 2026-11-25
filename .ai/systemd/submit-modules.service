@@ -1,0 +1,17 @@
+[Unit]
+Description=Cezar batch submitter
+Wants=cezar.service
+After=cezar.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/cezar-state/submit-modules.env
+ExecStart=/usr/bin/bash %h/cezar-bin/submit-modules.sh ${CEZAR_BATCH}
+Restart=on-failure
+RestartSec=15s
+UMask=0077
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

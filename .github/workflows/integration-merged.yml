@@ -1,0 +1,11 @@
+name: integration merged
+on:
+  push:
+    branches: [integration]
+permissions: {}
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: test "$GITHUB_REF" = refs/heads/integration

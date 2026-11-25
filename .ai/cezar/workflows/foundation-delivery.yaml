@@ -1,0 +1,158 @@
+version: 2
+name: foundation-delivery
+description: "Prepare stage-0 and leave the reviewed foundation in a draft PR."
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "scope"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh scope foundation"
+  - id: "implement"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Implement only stage-0. Pin the pnpm version in package.json and use corepack pnpm. Write docs/stage0-report.md for the E2 handoff. Do not run production operations or use GitHub write commands.
+  - id: "verify"
+    type: "check"
+    command: "corepack pnpm install --frozen-lockfile && corepack pnpm verify"
+  - id: "review"
+    type: "agent"
+    runner: "claude"
+    verdicts: ["approve","changes","human"]
+    prompt: |
+      {{task}}
+
+      Read and apply .ai/prompts/foundation-review.md. Inspect the existing stage-0 worktree and the local verification outcome. Do not edit files or use GitHub write commands.
+  - id: "retry"
+    type: "loop"
+    max: 2
+  - id: "fix"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Fix local verification or the last foundation review. Preserve the acceptance criteria. Keep the changes on stage-0. Do not run any GitHub write commands.
+      Verification: {{nodes.verify.output}}
+      Review: {{nodes.review.summary}}
+    session: {"continue":"implement"}
+  - id: "commit"
+    type: "git.commit"
+    message: "chore: deliver stage 0"
+  - id: "validate"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh validate foundation"
+  - id: "disarm"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh draft foundation"
+  - id: "push"
+    type: "git.push"
+  - id: "pr"
+    type: "github.draft-pr"
+    title: "Stage 0 foundation draft"
+  - id: "handoff"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh body foundation '{{nodes.pr.number}}' handoff"
+  - id: "notify"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh notify foundation handoff"
+  - id: "prepare_blocked"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh mode foundation blocked"
+  - id: "prepare_human"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh mode foundation needs-human"
+  - id: "writeup"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Write the observations and the E2 handoff instructions in docs/stage0-report.md.
+      Mode blocked means record the error, attempted remedies and next action. Mode needs-human means record what the maintainer must decide, your recommendation, and how the batch can continue if declined. Keep the current worktree intact. Do not run GitHub write commands or print credentials.
+      Mode: {{nodes.prepare_blocked.output}} {{nodes.prepare_human.output}}
+  - id: "failure_disarm"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh draft foundation"
+  - id: "failure_commit"
+    type: "git.commit"
+    message: "docs: record the delivery blocker"
+  - id: "failure_validate"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh validate foundation blocker"
+  - id: "failure_push"
+    type: "git.push"
+  - id: "failure_pr"
+    type: "github.draft-pr"
+    title: "Draft: delivery blocked"
+  - id: "failure_body"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh body foundation '{{nodes.failure_pr.number}}'"
+  - id: "log"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh log foundation"
+  - id: "alert"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh notify foundation"
+  - id: "ok"
+    type: "end"
+    status: "success"
+  - id: "blocked"
+    type: "end"
+    status: "failed"
+edges:
+  - { from: start, to: scope }
+  - { from: scope.pass, to: implement }
+  - { from: scope.fail, to: blocked }
+  - { from: implement.done, to: verify }
+  - { from: implement.failed, to: prepare_blocked }
+  - { from: verify.pass, to: review }
+  - { from: verify.fail, to: retry }
+  - { from: review.approve, to: commit }
+  - { from: review.changes, to: retry }
+  - { from: review.human, to: prepare_human }
+  - { from: review.failed, to: prepare_blocked }
+  - { from: retry.repeat, to: fix }
+  - { from: retry.exhausted, to: prepare_blocked }
+  - { from: fix.done, to: verify }
+  - { from: fix.failed, to: prepare_blocked }
+  - { from: commit.done, to: validate }
+  - { from: commit.nothing, to: validate }
+  - { from: commit.failed, to: prepare_blocked }
+  - { from: validate.pass, to: disarm }
+  - { from: validate.fail, to: prepare_blocked }
+  - { from: disarm.pass, to: push }
+  - { from: disarm.fail, to: prepare_blocked }
+  - { from: push.done, to: pr }
+  - { from: push.failed, to: prepare_blocked }
+  - { from: pr.created, to: handoff }
+  - { from: pr.failed, to: prepare_blocked }
+  - { from: handoff.pass, to: notify }
+  - { from: handoff.fail, to: prepare_blocked }
+  - { from: notify.pass, to: ok }
+  - { from: notify.fail, to: blocked }
+  - { from: prepare_blocked.pass, to: writeup }
+  - { from: prepare_blocked.fail, to: log }
+  - { from: prepare_human.pass, to: writeup }
+  - { from: prepare_human.fail, to: log }
+  - { from: writeup.done, to: failure_validate }
+  - { from: writeup.failed, to: log }
+  - { from: failure_validate.pass, to: failure_disarm }
+  - { from: failure_validate.fail, to: log }
+  - { from: failure_disarm.pass, to: failure_commit }
+  - { from: failure_disarm.fail, to: log }
+  - { from: failure_commit.done, to: failure_push }
+  - { from: failure_commit.nothing, to: failure_push }
+  - { from: failure_commit.failed, to: log }
+  - { from: failure_push.done, to: failure_pr }
+  - { from: failure_push.failed, to: log }
+  - { from: failure_pr.created, to: failure_body }
+  - { from: failure_pr.failed, to: log }
+  - { from: failure_body.pass, to: alert }
+  - { from: failure_body.fail, to: log }
+  - { from: log.pass, to: alert }
+  - { from: log.fail, to: alert }
+  - { from: alert.pass, to: blocked }
+  - { from: alert.fail, to: blocked }

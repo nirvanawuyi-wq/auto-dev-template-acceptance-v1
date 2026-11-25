@@ -1,0 +1,63 @@
+name: trusted preview status
+on:
+  workflow_run:
+    workflows: [test preview e2e]
+    types: [completed]
+permissions: {}
+jobs:
+  decide:
+    if: github.ref == 'refs/heads/main' && github.event.workflow_run.conclusion != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+    outputs:
+      sha: ${{ steps.decide.outputs.sha }}
+      state: ${{ steps.decide.outputs.state }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - uses: actions/download-artifact@v4
+        with:
+          name: deployment-evidence
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_VERCEL_DEPLOYMENT_ENV: ${{ vars.TEST_VERCEL_DEPLOYMENT_ENV }}
+          TEST_VERCEL_PROJECT_ID: ${{ vars.TEST_VERCEL_PROJECT_ID }}
+          TEST_VERCEL_ACTOR_ID: ${{ vars.TEST_VERCEL_ACTOR_ID }}
+          TEST_VERCEL_PROJECT_SLUG: ${{ vars.TEST_VERCEL_PROJECT_SLUG }}
+          TEST_VERCEL_PREVIEW_SUFFIX: ${{ vars.TEST_VERCEL_PREVIEW_SUFFIX }}
+          PRODUCTION_ORIGIN: ${{ vars.PRODUCTION_ORIGIN }}
+        run: node .github/scripts/preview-evidence.mjs publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ steps.decide.outputs.sha }}
+          path: deployment-evidence.json
+          if-no-files-found: error
+  publish:
+    needs: decide
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      statuses: write
+      checks: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ needs.decide.outputs.sha }}
+      STATE: ${{ needs.decide.outputs.state }}
+    steps:
+      - run: |
+          [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ && "$STATE" =~ ^(success|failure)$ ]]
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$STATE" -f context=e2e -f target_url="$url"
+          gh api "repos/$GITHUB_REPOSITORY/check-runs" -f name=e2e -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$STATE" -f details_url="$url"
+          test "$STATE" = success

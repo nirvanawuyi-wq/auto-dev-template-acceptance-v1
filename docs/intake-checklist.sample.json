@@ -1,0 +1,308 @@
+{
+  "$schema": "./intake-checklist.schema.json",
+  "schema_version": 1,
+  "generated_from": "docs/intake-checklist.md",
+  "items": [
+    {
+      "id": "email-service",
+      "name": "邮件服务（例）",
+      "where_to_get": "注册、绑定域名、加 DNS",
+      "budget_alert": "月度额度；超额是否停发",
+      "callback_url": "/api/webhooks/email",
+      "placements": {
+        "local_env_local": ["EMAIL_SANDBOX_API_KEY"],
+        "server_env_file": ["EMAIL_SANDBOX_API_KEY"],
+        "vercel_preview": ["EMAIL_SANDBOX_API_KEY"],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "dns_resolve",
+        "domain": "mail.example.com",
+        "record_type": "TXT",
+        "expect_value": "<服务商给出的验证记录>"
+      },
+      "verify_step": "D1",
+      "status": "not_started",
+      "notes": "E3 另用 integration 稳定域名的验签路径投递一次",
+      "evidence": null
+    },
+    {
+      "id": "github-ruleset",
+      "name": "GitHub 规则集",
+      "where_to_get": "私有仓库核对 Pro，按 B.6 开规则",
+      "budget_alert": "查私有仓库 Actions 分钟数",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "gh_api_read",
+        "api_path": "/repos/<owner>/<repo>/rulesets",
+        "method": "GET",
+        "expect_status": 200,
+        "expect": "规则集列表可读，integration 规则集存在"
+      },
+      "verify_step": "E3",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "main-lock",
+      "name": "main-lock 规则集",
+      "where_to_get": "网页限制 main 更新、禁止删除和强推，只允许你绕过",
+      "budget_alert": null,
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "gh_api_read",
+        "api_path": "/repos/<owner>/<repo>/rulesets",
+        "method": "GET",
+        "expect_status": 200,
+        "expect": "main-lock 规则集存在且 enforcement 为 active"
+      },
+      "verify_step": "D3",
+      "status": "not_started",
+      "notes": "D2 后、D3 邀请前确认 Active；E3 另验机器账号不能合全绿 PR【待验证】",
+      "evidence": null
+    },
+    {
+      "id": "vercel-project",
+      "name": "Vercel 项目",
+      "where_to_get": "浏览器导入仓库，手选 Next.js，正式分支暂设未创建的 production【待验证】，D2 用 production-lock 锁住该分支名",
+      "budget_alert": "核对 Hobby 默认 1 个并发构建及商用限制，按实测调 CI 时限",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": ["APP_ENV"],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "manual",
+        "how_to_confirm": "在 Vercel 控制台的部署记录里找 D1 推空提交触发的那一条；空仓库部署失败也算有记录",
+        "expect": "存在对应提交的部署记录"
+      },
+      "verify_step": "D1",
+      "status": "not_started",
+      "notes": "G2 切回 main 属人工操作，不在本清单验证",
+      "evidence": null
+    },
+    {
+      "id": "vercel-automation-bypass",
+      "name": "Vercel 自动化放行",
+      "where_to_get": "生成 Protection Bypass for Automation 密钥",
+      "budget_alert": null,
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": [],
+        "github_repo_secrets": ["VERCEL_AUTOMATION_BYPASS_SECRET"],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "vercel_preview", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "http_status",
+        "base": "preview_url",
+        "url_path": "/",
+        "method": "GET",
+        "expect_status": 200,
+        "with_automation_bypass": true
+      },
+      "verify_step": "E2",
+      "status": "not_started",
+      "notes": "D1 配置；风险见附录 B.7",
+      "evidence": null
+    },
+    {
+      "id": "database",
+      "name": "数据库（测试项目）",
+      "where_to_get": "新建测试项目，取网址和匿名 key；高权限 key 仅服务端",
+      "budget_alert": "核对 Supabase 免费项目数上限、闲置暂停、备份是否需付费与恢复",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+        "server_env_file": ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+        "vercel_preview": ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "tcp_connect",
+        "host": "<数据库主机>",
+        "port": 443
+      },
+      "verify_step": "D1",
+      "status": "not_started",
+      "notes": "自动检查走 Mock；高权限 key 仅服务端代码使用",
+      "evidence": null
+    },
+    {
+      "id": "db-admin-environment",
+      "name": "db-admin Environment",
+      "where_to_get": "GitHub Environment，只允许 main 使用",
+      "budget_alert": null,
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": ["SUPABASE_ACCESS_TOKEN", "SUPABASE_DB_PASSWORD", "SUPABASE_PROJECT_REF"]
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "git_repository"],
+      "smoke": {
+        "type": "gh_api_read",
+        "api_path": "/repos/<owner>/<repo>/environments/db-admin",
+        "method": "GET",
+        "expect_status": 200,
+        "expect": "Environment 存在且部署分支限定为 main"
+      },
+      "verify_step": "D1",
+      "status": "not_started",
+      "notes": "E2 另验迁移和体检",
+      "evidence": null
+    },
+    {
+      "id": "server-d1",
+      "name": "云服务器（D1 范围）",
+      "where_to_get": "A1 开机；检查两种用户能 ssh 和环境文件",
+      "budget_alert": "月租、续费、磁盘；清理已推送且结束的旧 worktree",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": [],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "file_perm",
+        "path": "~/secrets/<项目名>.env.local",
+        "expect_mode": "600"
+      },
+      "verify_step": "D1",
+      "status": "not_started",
+      "notes": "环境文件路径为 ~/secrets/<项目名>.env.local，变量由各项目分别登记；D1 同时检查两种用户能 ssh",
+      "evidence": null
+    },
+    {
+      "id": "machine-account",
+      "name": "机器账号（A1、D3 范围）",
+      "where_to_get": "main-lock 生效后邀请机器账号，给 Write；令牌用 gh auth login --with-token 登录",
+      "budget_alert": null,
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": ["MACHINE_ACCOUNT_TOKEN"],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "credential_scopes": ["repo"],
+      "smoke": {
+        "type": "gh_api_read",
+        "api_path": "/repos/<owner>/<repo>/collaborators/<machine-account>/permission",
+        "method": "GET",
+        "expect_status": 200,
+        "expect": "权限为 write，没有绕过权"
+      },
+      "verify_step": "E3",
+      "status": "not_started",
+      "notes": "A1 验登录属人工步骤（枚举外）；令牌不得带 workflow 权限",
+      "evidence": null
+    },
+    {
+      "id": "server-a1-d3",
+      "name": "云服务器（A1、D3 范围）",
+      "where_to_get": "登录 AI 命令行，克隆 ~/projects/<项目名>",
+      "budget_alert": "模型费用限额",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": ["AGENT_CLI_LOGIN"],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "manual",
+        "how_to_confirm": "以 agent 用户登录服务器，在项目副本里用 AI 命令行无界面跑一个读文档并提交的小任务",
+        "expect": "任务正常结束且提交可见"
+      },
+      "verify_step": "D3",
+      "status": "not_started",
+      "notes": "AGENT_CLI_LOGIN 是登录凭据的逻辑名，不是真实环境变量",
+      "evidence": null
+    },
+    {
+      "id": "cezar-cockpit",
+      "name": "Cezar 驾驶舱（A1、D3 范围）",
+      "where_to_get": "安装固定版、登记、限制访问",
+      "budget_alert": "单任务预算",
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": ["CEZAR_SERVICE_PASSPHRASE"],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "manual",
+        "how_to_confirm": "分别在手机和电脑浏览器打开驾驶舱并用服务口令登录一次",
+        "expect": "两台设备都能登录并看到任务列表"
+      },
+      "verify_step": "D3",
+      "status": "not_started",
+      "notes": "A1 范围的登录检查属人工步骤；另一份口令存在你的密码管理器",
+      "evidence": null
+    },
+    {
+      "id": "notify-channel",
+      "name": "通知渠道（A1 范围）",
+      "where_to_get": "用 @BotFather 建 bot、取自己的 chat_id；Slack、Discord 备选",
+      "budget_alert": null,
+      "callback_url": null,
+      "placements": {
+        "local_env_local": [],
+        "server_env_file": ["NOTIFY_BOT_TOKEN", "NOTIFY_CHAT_ID"],
+        "vercel_preview": [],
+        "github_repo_secrets": [],
+        "github_environment_db_admin": []
+      },
+      "forbidden_placements": ["local_env_local", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"],
+      "smoke": {
+        "type": "manual",
+        "how_to_confirm": "在服务器上触发一条测试通知，在你自己的手机上查看是否收到",
+        "expect": "手机收到测试消息"
+      },
+      "verify_step": "D3",
+      "status": "not_started",
+      "notes": "A1 发测试消息；D3 前必须已通过",
+      "evidence": null
+    }
+  ],
+  "manual_only": []
+}

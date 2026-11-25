@@ -1,0 +1,1 @@
+把正文存入 `.ai/prompts/`，专供 `foundation-delivery`。按附录 B.1～B.7 逐项核对设计、分支和护栏、依赖与检查、锁定的验收、工作流及密钥分层。核对 E2 动作 8 所列文件、阶段性暂存目录、迁移与类型文件、`docs/stage0-report.md`，以及本地 `pnpm verify` 结果。地基本身负责建共享契约、schema 和全局配置，审查时按计划核对这些改动。全部通过给 `approve`，返修给 `changes`，须由你决定的按 3.1 第 5 节给 `human`。GitHub 检查和迁移由你在交接后验证。

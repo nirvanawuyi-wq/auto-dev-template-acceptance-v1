@@ -1,0 +1,73 @@
+version: 2
+name: final-report
+description: "Read one batch summary and publish the final report as a draft PR."
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "scope"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh scope report"
+  - id: "report"
+    type: "agent"
+    runner: "codex"
+    prompt: |
+      {{task}}
+
+      Follow .ai/prompts/final-report.md. Read the already-written batch summary specified in the task before generating docs/run-report.md. Preserve that summary if anything fails. Do not modify any other file or use GitHub write commands.
+  - id: "commit"
+    type: "git.commit"
+    message: "docs: deliver unattended run report"
+  - id: "validate"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh validate report"
+  - id: "disarm"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh draft report"
+  - id: "push"
+    type: "git.push"
+  - id: "pr"
+    type: "github.draft-pr"
+    title: "Draft unattended run report"
+  - id: "handoff"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh body report '{{nodes.pr.number}}' handoff"
+  - id: "notify"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh notify report handoff"
+  - id: "log"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh log report"
+  - id: "alert"
+    type: "check"
+    command: "bash .ai/bin/delivery.sh notify report blocked"
+  - id: "ok"
+    type: "end"
+    status: "success"
+  - id: "blocked"
+    type: "end"
+    status: "failed"
+edges:
+  - { from: start, to: scope }
+  - { from: scope.pass, to: report }
+  - { from: scope.fail, to: blocked }
+  - { from: report.done, to: commit }
+  - { from: report.failed, to: log }
+  - { from: commit.done, to: validate }
+  - { from: commit.nothing, to: validate }
+  - { from: commit.failed, to: log }
+  - { from: validate.pass, to: disarm }
+  - { from: validate.fail, to: log }
+  - { from: disarm.pass, to: push }
+  - { from: disarm.fail, to: log }
+  - { from: push.done, to: pr }
+  - { from: push.failed, to: log }
+  - { from: pr.created, to: handoff }
+  - { from: pr.failed, to: log }
+  - { from: handoff.pass, to: notify }
+  - { from: handoff.fail, to: log }
+  - { from: notify.pass, to: ok }
+  - { from: notify.fail, to: blocked }
+  - { from: log.pass, to: alert }
+  - { from: log.fail, to: alert }
+  - { from: alert.pass, to: blocked }
+  - { from: alert.fail, to: blocked }

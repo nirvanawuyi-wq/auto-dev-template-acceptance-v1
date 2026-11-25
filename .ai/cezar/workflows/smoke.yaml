@@ -1,0 +1,77 @@
+version: 2
+name: smoke
+description: Exercise a one-line README change through independent review and merge into smoke-base.
+nodes:
+  - { id: start, type: start }
+  - { id: scope, type: check, command: "bash .ai/bin/smoke.sh scope" }
+  - id: implement
+    type: agent
+    runner: codex
+    prompt: |
+      {{task}}
+
+      In this smoke test append exactly one harmless line to README.md.
+      Do not change other files, commit, push, or use GitHub write commands.
+  - { id: commit, type: git.commit, message: "docs: exercise the smoke workflow" }
+  - { id: validate, type: check, command: "bash .ai/bin/smoke.sh validate" }
+  - { id: disarm, type: check, command: "bash .ai/bin/smoke.sh disarm" }
+  - { id: push, type: git.push }
+  - { id: pr, type: github.draft-pr, title: "D3 README smoke test" }
+  - { id: mark, type: check, command: "bash .ai/bin/smoke.sh mark '{{nodes.pr.number}}'" }
+  - id: review
+    type: agent
+    runner: claude
+    verdicts: [approve, changes]
+    prompt: |
+      Review submission {{nodes.mark.output}} for pull request #{{nodes.pr.number}}.
+      Compare that exact commit to its merge base with origin/smoke-base.
+      It must append one harmless line to README.md and change no other files.
+      Review only. Do not edit, commit, push, or use GitHub write commands.
+      End with CEZ:VERDICT approve if it passes. Otherwise describe the
+      requested correction and end with CEZ:VERDICT changes.
+  - { id: retry, type: loop, max: 2 }
+  - id: fix
+    type: agent
+    runner: codex
+    session: { continue: implement }
+    prompt: |
+      Correct the one added README.md line based on the latest review.
+      Review notes: {{nodes.review.summary}}
+      Change that line so the next review sees a new submission.
+      Do not edit other files, commit, push, or use GitHub write commands.
+  - { id: merge, type: check, command: "bash .ai/bin/smoke.sh merge '{{nodes.pr.number}}'" }
+  - id: alert
+    type: check
+    command: 'bash "$HOME/cezar-bin/notify.sh" smoke blocked'
+  - { id: ok, type: end, status: success }
+  - { id: blocked, type: end, status: failed }
+edges:
+  - { from: start, to: scope }
+  - { from: scope.pass, to: implement }
+  - { from: scope.fail, to: blocked }
+  - { from: implement.done, to: commit }
+  - { from: implement.failed, to: alert }
+  - { from: commit.done, to: validate }
+  - { from: commit.nothing, to: validate }
+  - { from: commit.failed, to: alert }
+  - { from: validate.pass, to: disarm }
+  - { from: validate.fail, to: alert }
+  - { from: disarm.pass, to: push }
+  - { from: disarm.fail, to: alert }
+  - { from: push.done, to: pr }
+  - { from: push.failed, to: alert }
+  - { from: pr.created, to: mark }
+  - { from: pr.failed, to: alert }
+  - { from: mark.pass, to: review }
+  - { from: mark.fail, to: alert }
+  - { from: review.approve, to: merge }
+  - { from: review.changes, to: retry }
+  - { from: review.failed, to: alert }
+  - { from: retry.repeat, to: fix }
+  - { from: retry.exhausted, to: alert }
+  - { from: fix.done, to: commit }
+  - { from: fix.failed, to: alert }
+  - { from: merge.pass, to: ok }
+  - { from: merge.fail, to: alert }
+  - { from: alert.pass, to: blocked }
+  - { from: alert.fail, to: blocked }

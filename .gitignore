@@ -1,0 +1,31 @@
+# 密钥和环境文件：只有 .env.example 可以入库
+.env*
+!.env.example
+*.local
+
+# 依赖和构建产物
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+
+# 本机工具状态（Cezar 等）
+.cezar-*
+
+# AI 工具的本机私有设置
+.claude/settings.local.json
+
+# 日志和临时文件
+*.log
+*.tmp
+*.swp
+
+# 项目内临时产物
+/local/
+
+# 操作系统垃圾文件
+.DS_Store
+Thumbs.db
+desktop.ini

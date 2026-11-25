@@ -1,0 +1,473 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "intake-checklist",
+  "description": "docs/intake-checklist.json: machine-readable form of docs/intake-checklist.md. Self-authored, not manual text. Values are NEVER stored here, only variable names.",
+  "type": "object",
+  "required": ["schema_version", "items", "manual_only"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "pattern": "^[A-Za-z0-9_./-]{1,100}$" },
+    "schema_version": { "const": 1 },
+    "generated_from": { "const": "docs/intake-checklist.md" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "manual_only": {
+      "$comment": "R5: production / irreversible items live only here and are never used in unattended runs.",
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/manualOnlyItem" }
+    }
+  },
+
+  "$defs": {
+    "noTokenLike": {
+      "not": {
+        "$comment": "R6: token-like string (ghp_ / sk- / eyJ / github_pat_ / xox / AKIA / PEM / long opaque run) is not allowed anywhere.",
+        "pattern": "(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]|sk_(live|test)_|pk_(live|test)_|rk_live_|eyJ[A-Za-z0-9]|xox[abprs]-[A-Za-z0-9]|AKIA[0-9A-Z]{8}|AIza[0-9A-Za-z_-]{8}|glpat-[A-Za-z0-9]|npm_[A-Za-z0-9]{8}|Bearer\\s+[A-Za-z0-9])|-----BEGIN|0x[0-9a-fA-F]{32,}|[A-Za-z0-9_+=-]{40,}"
+      }
+    },
+    "noControlChars": {
+      "not": {
+        "$comment": "R11: control characters (line breaks etc.) are not allowed in text fields.",
+        "pattern": "[\\u0000-\\u001f]"
+      }
+    },
+    "safeText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "allOf": [
+        { "$ref": "#/$defs/noTokenLike" },
+        { "$ref": "#/$defs/noControlChars" }
+      ]
+    },
+    "nullableText": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/safeText" }
+      ]
+    },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,47}$" },
+
+    "varBase": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$",
+      "allOf": [
+        {
+          "not": {
+            "$comment": "R4: mainnet / mnemonic / production secrets and ALLOW_MAINNET must not appear in any placement.",
+            "pattern": "MAINNET|MNEMONIC|SEED_?PHRASE|(^|_)PROD(UCTION)?(_|$)"
+          }
+        }
+      ]
+    },
+    "notDbAdminOnly": {
+      "not": {
+        "$comment": "R3: Supabase access token / database password may appear ONLY in github_environment_db_admin.",
+        "pattern": "^(SUPABASE_ACCESS_TOKEN|PGPASSWORD|[A-Z0-9_]*(DB|DATABASE|POSTGRES|POSTGRESQL|SUPABASE)_PASSWORD|(DB|DATABASE)_PASS)$"
+      }
+    },
+    "notServerOnly": {
+      "not": {
+        "$comment": "R8: machine-account token / agent login / Cezar passphrase / notify token and chat id are server_env_file only (appendix B.7).",
+        "pattern": "^(MACHINE_ACCOUNT_TOKEN|GH_TOKEN|AGENT_CLI_LOGIN|CEZAR_SERVICE_PASSPHRASE|NOTIFY_BOT_TOKEN|NOTIFY_CHAT_ID)$"
+      }
+    },
+    "notBypassOnly": {
+      "not": {
+        "$comment": "R9: VERCEL_AUTOMATION_BYPASS_SECRET is repo-level GitHub Secret only (appendix B.7).",
+        "pattern": "^VERCEL_AUTOMATION_BYPASS_SECRET$"
+      }
+    },
+    "varLocalOrVercel": {
+      "allOf": [
+        { "$ref": "#/$defs/varBase" },
+        { "$ref": "#/$defs/notDbAdminOnly" },
+        { "$ref": "#/$defs/notServerOnly" },
+        { "$ref": "#/$defs/notBypassOnly" }
+      ]
+    },
+    "varServer": {
+      "allOf": [
+        { "$ref": "#/$defs/varBase" },
+        { "$ref": "#/$defs/notDbAdminOnly" },
+        { "$ref": "#/$defs/notBypassOnly" }
+      ]
+    },
+    "varRepoSecret": {
+      "allOf": [
+        { "$ref": "#/$defs/varBase" },
+        { "$ref": "#/$defs/notDbAdminOnly" },
+        { "$ref": "#/$defs/notServerOnly" }
+      ]
+    },
+    "varDbAdmin": {
+      "allOf": [
+        { "$ref": "#/$defs/varBase" },
+        { "$ref": "#/$defs/notServerOnly" },
+        { "$ref": "#/$defs/notBypassOnly" }
+      ]
+    },
+    "varListLocalOrVercel": {
+      "type": "array", "uniqueItems": true, "maxItems": 32,
+      "items": { "$ref": "#/$defs/varLocalOrVercel" }
+    },
+    "varListServer": {
+      "type": "array", "uniqueItems": true, "maxItems": 32,
+      "items": { "$ref": "#/$defs/varServer" }
+    },
+    "varListRepoSecret": {
+      "type": "array", "uniqueItems": true, "maxItems": 32,
+      "items": { "$ref": "#/$defs/varRepoSecret" }
+    },
+    "varListDbAdmin": {
+      "type": "array", "uniqueItems": true, "maxItems": 32,
+      "items": { "$ref": "#/$defs/varDbAdmin" }
+    },
+
+    "placements": {
+      "$comment": "Four placements (GitHub split into repo-level Secrets and the db-admin Environment). Variable NAMES only; empty array means none.",
+      "type": "object",
+      "required": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "github_environment_db_admin"],
+      "additionalProperties": false,
+      "properties": {
+        "local_env_local": { "$ref": "#/$defs/varListLocalOrVercel" },
+        "server_env_file": { "$ref": "#/$defs/varListServer" },
+        "vercel_preview": { "$ref": "#/$defs/varListLocalOrVercel" },
+        "github_repo_secrets": { "$ref": "#/$defs/varListRepoSecret" },
+        "github_environment_db_admin": { "$ref": "#/$defs/varListDbAdmin" }
+      }
+    },
+    "forbiddenPlacements": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 6,
+      "items": {
+        "enum": ["local_env_local", "server_env_file", "vercel_preview", "github_repo_secrets", "github_environment_db_admin", "git_repository"]
+      },
+      "contains": {
+        "$comment": "R10: git_repository must always be forbidden (secrets never enter the repo).",
+        "const": "git_repository"
+      }
+    },
+
+    "status": { "enum": ["not_started", "pending", "configured", "verified"] },
+
+    "evidence": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["conclusion", "checked_at", "summary"],
+          "additionalProperties": false,
+          "properties": {
+            "conclusion": { "enum": ["pass", "fail", "pending"] },
+            "checked_at": {
+              "type": "string",
+              "maxLength": 25,
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$"
+            },
+            "summary": {
+              "$comment": "R6: redacted conclusion only, e.g. HTTP 200. Allow-list of characters, no long opaque runs, no token prefixes.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[A-Za-z0-9一-鿿　-〿＀-￯ .,:%()/_=-]{1,120}$",
+              "allOf": [
+                { "$ref": "#/$defs/noTokenLike" },
+                {
+                  "not": {
+                    "$comment": "R6: opaque run of 24+ characters is not allowed in evidence.",
+                    "pattern": "[A-Za-z0-9_+=-]{24,}"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    "hostname": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^(<[^<>\\s]+>|[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)$"
+    },
+
+    "smokeHttpStatus": {
+      "type": "object",
+      "required": ["type", "base", "url_path", "method", "expect_status"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "http_status" },
+        "base": { "enum": ["preview_url", "integration_url", "callback_url"] },
+        "url_path": { "type": "string", "maxLength": 200, "pattern": "^/[A-Za-z0-9_./<>{}~%-]*$" },
+        "method": { "enum": ["GET", "HEAD"] },
+        "expect_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "with_automation_bypass": { "type": "boolean" }
+      }
+    },
+    "smokeQueryBalance": {
+      "type": "object",
+      "required": ["type", "what", "read_only", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "query_balance" },
+        "what": { "allOf": [{ "$ref": "#/$defs/safeText" }, { "minLength": 4 }] },
+        "read_only": { "const": true },
+        "expect": { "enum": ["reachable", "balance_at_least"] },
+        "threshold": { "type": "number", "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "expect": { "const": "balance_at_least" } }, "required": ["expect"] },
+          "then": { "required": ["threshold"] }
+        },
+        {
+          "if": { "properties": { "expect": { "const": "reachable" } }, "required": ["expect"] },
+          "then": { "not": { "required": ["threshold"] } }
+        }
+      ]
+    },
+    "smokeDnsResolve": {
+      "type": "object",
+      "required": ["type", "domain", "record_type", "expect_value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "dns_resolve" },
+        "domain": { "$ref": "#/$defs/hostname" },
+        "record_type": { "enum": ["A", "AAAA", "CNAME", "MX", "TXT", "NS"] },
+        "expect_value": { "$ref": "#/$defs/safeText" }
+      }
+    },
+    "smokeTcpConnect": {
+      "type": "object",
+      "required": ["type", "host", "port"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "tcp_connect" },
+        "host": { "$ref": "#/$defs/hostname" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
+      }
+    },
+    "smokeGhApiRead": {
+      "type": "object",
+      "required": ["type", "api_path", "method", "expect_status", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "gh_api_read" },
+        "api_path": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^/(repos|orgs|user|users|rate_limit)(/[A-Za-z0-9_.<>{}:%-]+)*$",
+          "allOf": [
+            { "not": { "$comment": "R1: path traversal is not allowed in api_path.", "pattern": "\\.\\." } }
+          ]
+        },
+        "method": { "const": "GET" },
+        "expect_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "expect": { "$ref": "#/$defs/safeText" }
+      }
+    },
+    "smokeFilePerm": {
+      "type": "object",
+      "required": ["type", "path", "expect_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "file_perm" },
+        "path": { "type": "string", "maxLength": 200, "pattern": "^(~/|/)[^\\s;&|$`'\"\\\\*?()]+$" },
+        "expect_mode": { "type": "string", "pattern": "^[0-7]{3,4}$" }
+      }
+    },
+    "smokeManual": {
+      "type": "object",
+      "required": ["type", "how_to_confirm", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "manual" },
+        "how_to_confirm": { "allOf": [{ "$ref": "#/$defs/safeText" }, { "minLength": 12 }] },
+        "expect": { "allOf": [{ "$ref": "#/$defs/safeText" }, { "minLength": 4 }] }
+      }
+    },
+    "smoke": {
+      "$comment": "R1: smoke method must be one of the predefined types; free-form commands are impossible because every branch forbids extra properties.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["http_status", "query_balance", "dns_resolve", "tcp_connect", "gh_api_read", "file_perm", "manual"] }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/smokeHttpStatus" },
+        { "$ref": "#/$defs/smokeQueryBalance" },
+        { "$ref": "#/$defs/smokeDnsResolve" },
+        { "$ref": "#/$defs/smokeTcpConnect" },
+        { "$ref": "#/$defs/smokeGhApiRead" },
+        { "$ref": "#/$defs/smokeFilePerm" },
+        { "$ref": "#/$defs/smokeManual" }
+      ]
+    },
+
+    "credentialScopes": {
+      "$comment": "R7: GitHub machine-account token must not carry the workflow scope/permission.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_:.-]{0,39}$",
+        "allOf": [
+          { "not": { "$comment": "R7: workflow scope is forbidden.", "pattern": "[Ww][Oo][Rr][Kk][Ff][Ll][Oo][Ww]" } }
+        ]
+      }
+    },
+
+    "item": {
+      "type": "object",
+      "required": ["id", "name", "where_to_get", "budget_alert", "callback_url", "placements", "forbidden_placements", "smoke", "verify_step", "status", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/safeText" },
+        "where_to_get": { "$ref": "#/$defs/safeText" },
+        "budget_alert": { "$ref": "#/$defs/nullableText" },
+        "callback_url": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 200, "pattern": "^(https?://[^\\s?#@]+|/[^\\s?#@]*)$" }
+          ]
+        },
+        "placements": { "$ref": "#/$defs/placements" },
+        "forbidden_placements": { "$ref": "#/$defs/forbiddenPlacements" },
+        "smoke": { "$ref": "#/$defs/smoke" },
+        "verify_step": { "enum": ["D1", "D3", "E2", "E3"] },
+        "status": { "$ref": "#/$defs/status" },
+        "waiting_for": { "$ref": "#/$defs/safeText" },
+        "credential_scopes": { "$ref": "#/$defs/credentialScopes" },
+        "notes": { "$ref": "#/$defs/safeText" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "pending" } }, "required": ["status"] },
+          "then": { "required": ["waiting_for"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "verified" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "evidence": {
+                "type": "object",
+                "properties": { "conclusion": { "const": "pass" } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "not_started" } }, "required": ["status"] },
+          "then": { "properties": { "evidence": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "forbidden_placements": { "contains": { "const": "local_env_local" } } }, "required": ["forbidden_placements"] },
+          "then": { "properties": { "placements": { "properties": { "local_env_local": { "$comment": "R10: placement is listed as forbidden but has variables.", "maxItems": 0 } } } } }
+        },
+        {
+          "if": { "properties": { "forbidden_placements": { "contains": { "const": "server_env_file" } } }, "required": ["forbidden_placements"] },
+          "then": { "properties": { "placements": { "properties": { "server_env_file": { "$comment": "R10: placement is listed as forbidden but has variables.", "maxItems": 0 } } } } }
+        },
+        {
+          "if": { "properties": { "forbidden_placements": { "contains": { "const": "vercel_preview" } } }, "required": ["forbidden_placements"] },
+          "then": { "properties": { "placements": { "properties": { "vercel_preview": { "$comment": "R10: placement is listed as forbidden but has variables.", "maxItems": 0 } } } } }
+        },
+        {
+          "if": { "properties": { "forbidden_placements": { "contains": { "const": "github_repo_secrets" } } }, "required": ["forbidden_placements"] },
+          "then": { "properties": { "placements": { "properties": { "github_repo_secrets": { "$comment": "R10: placement is listed as forbidden but has variables.", "maxItems": 0 } } } } }
+        },
+        {
+          "if": { "properties": { "forbidden_placements": { "contains": { "const": "github_environment_db_admin" } } }, "required": ["forbidden_placements"] },
+          "then": { "properties": { "placements": { "properties": { "github_environment_db_admin": { "$comment": "R10: placement is listed as forbidden but has variables.", "maxItems": 0 } } } } }
+        },
+        {
+          "if": {
+            "properties": { "placements": { "properties": { "github_environment_db_admin": { "minItems": 1 } }, "required": ["github_environment_db_admin"] } },
+            "required": ["placements"]
+          },
+          "then": {
+            "properties": {
+              "forbidden_placements": {
+                "allOf": [
+                  { "contains": { "$comment": "R3: item using db-admin must forbid local_env_local.", "const": "local_env_local" } },
+                  { "contains": { "$comment": "R3: item using db-admin must forbid server_env_file.", "const": "server_env_file" } },
+                  { "contains": { "$comment": "R3: item using db-admin must forbid vercel_preview.", "const": "vercel_preview" } },
+                  { "contains": { "$comment": "R3: item using db-admin must forbid github_repo_secrets.", "const": "github_repo_secrets" } }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "placements": {
+                "properties": {
+                  "server_env_file": { "contains": { "pattern": "^(MACHINE_ACCOUNT_TOKEN|GH_TOKEN)$" } }
+                },
+                "required": ["server_env_file"]
+              }
+            },
+            "required": ["placements"]
+          },
+          "then": { "required": ["credential_scopes"] }
+        }
+      ]
+    },
+
+    "manualOnlyItem": {
+      "$comment": "R5: no placements, no verify_step, never used in unattended runs. Variables are not recorded at all.",
+      "type": "object",
+      "required": ["id", "name", "where_to_get", "budget_alert", "unattended_use", "forbidden_placements", "smoke", "status", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/safeText" },
+        "where_to_get": { "$ref": "#/$defs/safeText" },
+        "budget_alert": { "$ref": "#/$defs/nullableText" },
+        "unattended_use": { "const": false },
+        "forbidden_placements": {
+          "allOf": [
+            { "$ref": "#/$defs/forbiddenPlacements" },
+            { "contains": { "$comment": "R5: manual_only must forbid local_env_local.", "const": "local_env_local" } },
+            { "contains": { "$comment": "R5: manual_only must forbid server_env_file.", "const": "server_env_file" } },
+            { "contains": { "$comment": "R5: manual_only must forbid vercel_preview.", "const": "vercel_preview" } },
+            { "contains": { "$comment": "R5: manual_only must forbid github_repo_secrets.", "const": "github_repo_secrets" } },
+            { "contains": { "$comment": "R5: manual_only must forbid github_environment_db_admin.", "const": "github_environment_db_admin" } }
+          ]
+        },
+        "smoke": { "$ref": "#/$defs/smokeManual" },
+        "status": { "$ref": "#/$defs/status" },
+        "waiting_for": { "$ref": "#/$defs/safeText" },
+        "notes": { "$ref": "#/$defs/safeText" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "pending" } }, "required": ["status"] },
+          "then": { "required": ["waiting_for"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "verified" } }, "required": ["status"] },
+          "then": { "properties": { "evidence": { "type": "object", "properties": { "conclusion": { "const": "pass" } } } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "not_started" } }, "required": ["status"] },
+          "then": { "properties": { "evidence": { "type": "null" } } }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,73 @@
+name: trusted guard
+on:
+  pull_request_target:
+    branches: [main, integration]
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions: {}
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          test "$SAME_REPO" = true
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$PR_HEAD" =~ ^[0-9a-f]{40}$ && "$PR_BASE" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin "refs/pull/$PR_NUMBER/head:refs/guard/head"
+          test "$(git rev-parse refs/guard/head)" = "$PR_HEAD"
+          test "$(git rev-parse HEAD)" = "$PR_BASE"
+          if [[ "$BASE_BRANCH" == main && "$HEAD_BRANCH" == integration ]]; then
+            git fetch --no-tags origin refs/heads/integration:refs/guard/integration
+            test "$(git rev-parse refs/guard/integration)" = "$PR_HEAD"
+            common=$(git merge-base "$PR_BASE" "$PR_HEAD")
+            git rev-list --first-parent "$PR_HEAD" | grep -Fx "$common" >/dev/null
+            git diff --quiet "$common" "$PR_HEAD" -- .github
+            node .github/scripts/preview-evidence.mjs schema "$PR_HEAD"
+          else
+            node .github/scripts/guard.mjs "$PR_BASE" "$PR_HEAD" "$BASE_BRANCH" "$HEAD_BRANCH"
+          fi
+          jq -n --arg head "$PR_HEAD" --arg base "$PR_BASE" --arg pr "$PR_NUMBER"             '{head:$head, base:$base, pullRequest:$pr}' > guard-evidence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guard-${{ github.event.pull_request.head.sha }}
+          path: guard-evidence.json
+          if-no-files-found: error
+  publish:
+    if: ${{ always() && !cancelled() }}
+    needs: decide
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      statuses: write
+      checks: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DECISION: ${{ needs.decide.result }}
+    steps:
+      - run: |
+          [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          result=failure
+          if [[ "$DECISION" == success ]]; then result=success; fi
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$result" -f context=guard -f target_url="$url"
+          gh api "repos/$GITHUB_REPOSITORY/check-runs" -f name=guard -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$result" -f details_url="$url"
+          test "$result" = success
